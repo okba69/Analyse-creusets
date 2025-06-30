@@ -42,8 +42,9 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def detect_sets_and_anomalies(df: pd.DataFrame):
-    data_cols = df.columns[1:57]
+    data_cols = list(df.columns[1:57])
     set_starts = []
+
     # repérer début de set
     for idx in range(len(df)):
         vals = pd.to_numeric(df.loc[idx, data_cols], errors='coerce')
@@ -59,14 +60,23 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
     meta = []
     current = set()
     last = 0
+    # drapeaux pour chute sous seuil
+    dropped_flags = {ci: False for ci in range(len(data_cols))}
 
     for idx in range(len(df)):
         vals = pd.to_numeric(df.loc[idx, data_cols], errors='coerce')
         cnt80 = (vals > SET_THRESHOLD).sum()
         cnt70 = (vals > ANOMALY_THRESHOLD).sum()
 
+        # Mettre à jour dropped_flags pour chaque colonne
+        for ci, col in enumerate(data_cols):
+            v = pd.to_numeric(df.at[idx, col], errors='coerce')
+            if pd.notna(v) and v < ANOMALY_THRESHOLD:
+                dropped_flags[ci] = True
+
         if not in_set:
             if cnt80 >= 40:
+                # début de set
                 set_count += 1
                 try:
                     ts = pd.to_datetime(df.iloc[idx,0])
@@ -74,31 +84,38 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
                 except:
                     date = "Inconnu"
 
+                # sauvegarde set précédent
                 if last > 0 and current:
                     anomalies_by_set[last] = sorted(current)
+                # reset anomalies pour nouveau set
                 meta.append({"Set": set_count, "Date": date})
                 last = set_count
                 current = set()
                 in_set = True
+                # reset dropped_flags pour nouveau set
+                dropped_flags = {ci: False for ci in range(len(data_cols))}
             else:
-                # Nouveauté : ne détecter anomalies qu'après avoir atteint le seuil >70
-                if cnt70 >= ANOMALY_THRESHOLD:
-                    for ci, col in enumerate(data_cols):
-                        v = pd.to_numeric(df.at[idx, col], errors='coerce')
-                        if v >= SET_THRESHOLD:
-                            if idx+1 < len(df):
-                                nv = pd.to_numeric(df.at[idx+1, col], errors='coerce')
-                                if pd.notna(nv) and nv < SET_THRESHOLD:
-                                    continue
-                            colnum = ci + 1
-                            if colnum not in current:
-                                current.add(colnum)
-                                anomaly_cells.append((idx+2, ci+2))
+                # détection anomalies uniquement après chute sous 70
+                for ci, col in enumerate(data_cols):
+                    if not dropped_flags[ci]:
+                        continue
+                    v = pd.to_numeric(df.at[idx, col], errors='coerce')
+                    if pd.notna(v) and v >= SET_THRESHOLD:
+                        # annulation si valeur suivante < seuil set
+                        if idx+1 < len(df):
+                            nv = pd.to_numeric(df.at[idx+1, col], errors='coerce')
+                            if pd.notna(nv) and nv < SET_THRESHOLD:
+                                continue
+                        colnum = ci + 1
+                        if colnum not in current:
+                            current.add(colnum)
+                            anomaly_cells.append((idx+2, ci+2))
         else:
+            # fin de set
             if cnt70 < ANOMALY_THRESHOLD:
                 in_set = False
 
-    # Sauvegarde du dernier set
+    # sauvegarde dernier set
     if last > 0 and current:
         anomalies_by_set[last] = sorted(current)
 
