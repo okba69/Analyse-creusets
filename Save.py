@@ -44,6 +44,7 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
 def detect_sets_and_anomalies(df: pd.DataFrame):
     data_cols = df.columns[1:57]
     set_starts = []
+    # repérer début de set
     for idx in range(len(df)):
         vals = pd.to_numeric(df.loc[idx, data_cols], errors='coerce')
         if (vals > SET_THRESHOLD).sum() >= 40:
@@ -80,21 +81,24 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
                 current = set()
                 in_set = True
             else:
-                for ci, col in enumerate(data_cols):
-                    v = pd.to_numeric(df.at[idx, col], errors='coerce')
-                    if v >= SET_THRESHOLD:
-                        if idx+1 < len(df):
-                            nv = pd.to_numeric(df.at[idx+1, col], errors='coerce')
-                            if pd.notna(nv) and nv < SET_THRESHOLD:
-                                continue
-                        colnum = ci + 1
-                        if colnum not in current:
-                            current.add(colnum)
-                            anomaly_cells.append((idx+2, ci+2))
+                # Nouveauté : ne détecter anomalies qu'après avoir atteint le seuil >70
+                if cnt70 >= ANOMALY_THRESHOLD:
+                    for ci, col in enumerate(data_cols):
+                        v = pd.to_numeric(df.at[idx, col], errors='coerce')
+                        if v >= SET_THRESHOLD:
+                            if idx+1 < len(df):
+                                nv = pd.to_numeric(df.at[idx+1, col], errors='coerce')
+                                if pd.notna(nv) and nv < SET_THRESHOLD:
+                                    continue
+                            colnum = ci + 1
+                            if colnum not in current:
+                                current.add(colnum)
+                                anomaly_cells.append((idx+2, ci+2))
         else:
-            if cnt70 < 40:
+            if cnt70 < ANOMALY_THRESHOLD:
                 in_set = False
 
+    # Sauvegarde du dernier set
     if last > 0 and current:
         anomalies_by_set[last] = sorted(current)
 
@@ -166,7 +170,7 @@ if uploaded and analyse:
     st.table(recap)
     # Total anomalies
     total = recap["Nb anomalies"].sum()
-    st.markdown(f"**Total anomalies sur tous les sets : {total}**")
+    st.markdown(f"**Total anomalies sur tous les sets : {total}**")
 
     # Affichage Top5
     st.markdown("## Top 5 des emplacements changés le plus souvent")
