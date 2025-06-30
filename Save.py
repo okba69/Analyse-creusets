@@ -70,9 +70,8 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
                 try:
                     ts = pd.to_datetime(df.iloc[idx,0])
                     date = ts.strftime("%d/%m/%Y")
-                    day  = ts.strftime("%A")
                 except:
-                    date, day = "Inconnu", "Inconnu"
+                    date = "Inconnu"
 
                 if last > 0 and current:
                     anomalies_by_set[last] = sorted(current)
@@ -165,6 +164,9 @@ if uploaded and analyse:
     ]).set_index("Set")
     st.markdown("## Récapitulatif des sets")
     st.table(recap)
+    # Total anomalies
+    total = recap["Nb anomalies"].sum()
+    st.markdown(f"**Total anomalies sur tous les sets : {total}**")
 
     # Affichage Top5
     st.markdown("## Top 5 des emplacements changés le plus souvent")
