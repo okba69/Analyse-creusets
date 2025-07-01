@@ -15,7 +15,6 @@ SET_THRESHOLD     = 80
 ANOMALY_THRESHOLD = 70
 RESET_COUNT       = 30
 
-
 def clean_data(df: pd.DataFrame) -> pd.DataFrame:
     data_cols = df.columns[1:57]
     df[data_cols] = df[data_cols].applymap(
@@ -37,7 +36,6 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
                 df.at[i, col] = ""
     return df
 
-
 def detect_sets_and_anomalies(df: pd.DataFrame):
     data_cols = list(df.columns[1:57])
     set_starts = []
@@ -52,27 +50,36 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
     can_detect_new_set = True
     reset_tracker = set()
     dropped_flags = {ci: False for ci in range(len(data_cols))}
+    
+    # Première passe : détecter tous les sets
+    set_rows = set()  # Index 0-based pour les lignes de sets
+    for idx in range(len(df)):
+        vals = pd.to_numeric(df.loc[idx, data_cols], errors='coerce')
+        cnt80 = (vals > SET_THRESHOLD).sum()
+        if cnt80 >= 40:
+            set_rows.add(idx)
 
     for idx in range(len(df)):
         vals = pd.to_numeric(df.loc[idx, data_cols], errors='coerce')
         cnt80 = (vals > SET_THRESHOLD).sum()
         cnt70 = (vals > ANOMALY_THRESHOLD).sum()
-
-        # Mise à jour des flags de chute
+        
         for ci, col in enumerate(data_cols):
             v = pd.to_numeric(df.at[idx, col], errors='coerce')
             if pd.notna(v) and v < ANOMALY_THRESHOLD:
                 dropped_flags[ci] = True
                 reset_tracker.add(ci)
-
-        # Détection de nouveau set
+                
         if not in_set:
-            if can_detect_new_set and cnt80 >= 25:
-                set_starts.append(idx + 1)
+            if can_detect_new_set and cnt80 >= 40:
+                set_starts.append(idx + 1)  # +1 pour Excel (ligne 1-based)
                 set_count += 1
                 try:
                     ts = pd.to_datetime(df.iloc[idx,0], errors='coerce')
-                    date = ts.strftime("%d/%m/%Y %H:%M") if pd.notnull(ts) else "Inconnu"
+                    if pd.notnull(ts):
+                        date = ts.strftime("%d/%m/%Y %H:%M")
+                    else:
+                        date = "Inconnu"
                 except:
                     date = "Inconnu"
                 if last > 0 and current:
@@ -81,46 +88,43 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
                 last = set_count
                 current = set()
                 in_set = True
-                can_detect_new_set = False
                 dropped_flags = {ci: False for ci in range(len(data_cols))}
+                can_detect_new_set = False
                 reset_tracker = set()
                 continue
             else:
-                # Détection d'anomalies entre sets
-                for ci, col in enumerate(data_cols):
-                    if not dropped_flags[ci]:
-                        continue
-                    v = pd.to_numeric(df.at[idx, col], errors='coerce')
-                    if pd.notna(v) and v >= SET_THRESHOLD:
-                        if idx+1 < len(df):
-                            nv = pd.to_numeric(df.at[idx+1, col], errors='coerce')
-                            if pd.notna(nv) and nv < SET_THRESHOLD:
-                                continue
-                        colnum = ci + 1
-                        if colnum not in current:
-                            current.add(colnum)
-                            anomaly_cells.append((idx+2, ci+2))
-                if not can_detect_new_set and len(reset_tracker) >= RESET_COUNT:
-                    can_detect_new_set = True
+                # Vérifier si on est sur une ligne de set ou une ligne avant/après
+                is_forbidden_line = (
+                    idx in set_rows or  # Ligne actuelle est un set
+                    (idx + 1 < len(df) and (idx + 1) in set_rows) or  # Ligne suivante est un set
+                    (idx > 0 and (idx - 1) in set_rows)  # Ligne précédente est un set
+                )
+                
+                if not is_forbidden_line:
+                    for ci, col in enumerate(data_cols):
+                        if not dropped_flags[ci]:
+                            continue
+                        v = pd.to_numeric(df.at[idx, col], errors='coerce')
+                        if pd.notna(v) and v >= SET_THRESHOLD:
+                            if idx+1 < len(df):
+                                nv = pd.to_numeric(df.at[idx+1, col], errors='coerce')
+                                if pd.notna(nv) and nv < SET_THRESHOLD:
+                                    continue
+                            colnum = ci + 1
+                            if colnum not in current:
+                                current.add(colnum)
+                                # Utiliser idx+1 pour être cohérent avec Excel (1-based)
+                                anomaly_cells.append((idx+1, ci+2))
+            if not can_detect_new_set and len(reset_tracker) >= RESET_COUNT:
+                can_detect_new_set = True
         else:
-            # Fin de set
             if cnt70 < ANOMALY_THRESHOLD:
                 in_set = False
-
-    # Ajout des anomalies du dernier set
+                
     if last > 0 and current:
         anomalies_by_set[last] = sorted(current)
 
-    # === Filtrage des anomalies sur les lignes de set uniquement ===
-    set_rows_to_exclude = set(set_starts)
-    anomaly_cells = [
-        (row, col)
-        for (row, col) in anomaly_cells
-        if row not in set_rows_to_exclude
-    ]
-
     return set_starts, anomaly_cells, meta, anomalies_by_set
-
 
 def to_excel(df, set_starts, anomaly_cells, meta, anomalies_by_set, ranking):
     wb = Workbook()
@@ -142,16 +146,13 @@ def to_excel(df, set_starts, anomaly_cells, meta, anomalies_by_set, ranking):
             cell.style = date_style
         for c in range(1, len(df.columns)):
             ws.cell(row=r+1, column=c+1, value=df.iloc[r, c])
-
     orange = PatternFill("solid", fgColor="FFA500")
     blue   = PatternFill("solid", fgColor="ADD8E6")
-
     for row_idx in set_starts:
         for cell in ws[row_idx]:
             cell.fill = orange
     for row, col in anomaly_cells:
         ws.cell(row=row, column=col).fill = blue
-
     ws2 = wb.create_sheet("Résumé")
     ws2.append(["Set", "Date", "Nb anomalies"])
     total_anomalies = 0
@@ -166,19 +167,16 @@ def to_excel(df, set_starts, anomaly_cells, meta, anomalies_by_set, ranking):
     ws2.append(["Classement complet Emplacements","Occurrences"])
     for val, cnt in ranking:
         ws2.append([val, cnt])
-
     ws.column_dimensions["A"].width = 22
     for i in range(2, len(df.columns)+1):
         ws.column_dimensions[get_column_letter(i)].width = 5.5
     for col_cells in ws2.columns:
         ws2.column_dimensions[get_column_letter(col_cells[0].column)].width = 15
-
     buf = BytesIO()
     wb.save(buf)
     buf.seek(0)
     return buf.getvalue()
 
-# Interface Streamlit
 uploaded = st.file_uploader("Téléverse ton fichier .xlsx", type=["xlsx"])
 analyse = st.button("Analyser")
 
@@ -188,12 +186,10 @@ if uploaded and analyse:
     set_starts, anomaly_cells, meta, anomalies_by_set = detect_sets_and_anomalies(df_clean)
     all_anoms = [x for vals in anomalies_by_set.values() for x in vals]
     ranking = Counter(all_anoms).most_common()
-
     recap = pd.DataFrame([
         {"Set": m["Set"], "Date": m["Date"], "Nb anomalies": len(anomalies_by_set.get(m["Set"], []))}
         for m in meta
     ]).set_index("Set")
-
     st.markdown("## Récapitulatif des sets")
     st.table(recap)
     total = recap["Nb anomalies"].sum()
@@ -201,7 +197,6 @@ if uploaded and analyse:
     st.markdown("## Classement complet des emplacements changés le plus souvent")
     df_ranking = pd.DataFrame(ranking, columns=["Emplacement","Occurrences"]).set_index("Emplacement")
     st.table(df_ranking)
-
     excel_bytes = to_excel(df_clean, set_starts, anomaly_cells, meta, anomalies_by_set, ranking)
     st.download_button(
         "📥 Télécharger le rapport Excel",
