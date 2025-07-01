@@ -13,7 +13,7 @@ st.markdown("Dépose ton fichier Excel, puis clique sur **Analyser**. Les seuils
 CLEAN_THRESHOLD   = 60
 SET_THRESHOLD     = 80
 ANOMALY_THRESHOLD = 70
-RESET_COUNT       = 30    # Nb d'emplacements à faire repasser sous 70 pour permettre nouveau set
+RESET_COUNT       = 30
 
 def clean_data(df: pd.DataFrame) -> pd.DataFrame:
     data_cols = df.columns[1:57]
@@ -81,7 +81,7 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
                 dropped_flags = {ci: False for ci in range(len(data_cols))}
                 can_detect_new_set = False
                 reset_tracker = set()
-                continue  # <-- Empêche la détection d'anomalies sur cette ligne
+                continue
             else:
                 for ci, col in enumerate(data_cols):
                     if not dropped_flags[ci]:
@@ -103,6 +103,16 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
                 in_set = False
     if last > 0 and current:
         anomalies_by_set[last] = sorted(current)
+
+    # === Filtrage des anomalies sur les lignes d'un set, avant et après ===
+    set_rows_to_exclude = set()
+    for row in set_starts:
+        set_rows_to_exclude.add(row)      # Ligne du set
+        set_rows_to_exclude.add(row - 1)  # Ligne avant
+        set_rows_to_exclude.add(row + 1)  # Ligne après
+
+    anomaly_cells = [(row, col) for (row, col) in anomaly_cells if row not in set_rows_to_exclude]
+
     return set_starts, anomaly_cells, meta, anomalies_by_set
 
 def to_excel(df, set_starts, anomaly_cells, meta, anomalies_by_set, ranking):
