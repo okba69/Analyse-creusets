@@ -5,19 +5,14 @@ from openpyxl.styles import PatternFill, NamedStyle
 from openpyxl.utils import get_column_letter
 from io import BytesIO
 from collections import Counter
-from datetime import datetime, timedelta
 
-# Configuration de la page
 st.set_page_config(page_title="Analyse Creusets", layout="wide")
 st.title("🔍 Analyse et détection de sets/anomalies")
 st.markdown("Dépose ton fichier Excel, puis clique sur **Analyser**. Les seuils sont préconfigurés.")
 
-# Seuils figés
 CLEAN_THRESHOLD   = 60
 SET_THRESHOLD     = 80
 ANOMALY_THRESHOLD = 70
-
-# Fonctions métier
 
 def clean_data(df: pd.DataFrame) -> pd.DataFrame:
     data_cols = df.columns[1:57]
@@ -43,15 +38,12 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
 def detect_sets_and_anomalies(df: pd.DataFrame):
     data_cols = list(df.columns[1:57])
     set_starts = []
-
-    # repérer début de set
     for idx in range(len(df)):
         vals = pd.to_numeric(df.loc[idx, data_cols], errors='coerce')
         if (vals > SET_THRESHOLD).sum() >= 40:
             if idx > 0:
                 df.loc[idx-1, data_cols] = ""
             set_starts.append(idx+2)
-
     set_count = 0
     in_set = False
     anomalies_by_set = {}
@@ -60,17 +52,14 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
     current = set()
     last = 0
     dropped_flags = {ci: False for ci in range(len(data_cols))}
-
     for idx in range(len(df)):
         vals = pd.to_numeric(df.loc[idx, data_cols], errors='coerce')
         cnt80 = (vals > SET_THRESHOLD).sum()
         cnt70 = (vals > ANOMALY_THRESHOLD).sum()
-
         for ci, col in enumerate(data_cols):
             v = pd.to_numeric(df.at[idx, col], errors='coerce')
             if pd.notna(v) and v < ANOMALY_THRESHOLD:
                 dropped_flags[ci] = True
-
         if not in_set:
             if cnt80 >= 40:
                 set_count += 1
@@ -82,7 +71,6 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
                         date = "Inconnu"
                 except:
                     date = "Inconnu"
-
                 if last > 0 and current:
                     anomalies_by_set[last] = sorted(current)
                 meta.append({"Set": set_count, "Date": date})
@@ -107,47 +95,36 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
         else:
             if cnt70 < ANOMALY_THRESHOLD:
                 in_set = False
-
     if last > 0 and current:
         anomalies_by_set[last] = sorted(current)
-
     return set_starts, anomaly_cells, meta, anomalies_by_set
 
 def to_excel(df, set_starts, anomaly_cells, meta, anomalies_by_set, ranking):
     wb = Workbook()
     ws = wb.active
     ws.title = "Données nettoyées"
-    
-    # Création d'un style date + heure + minute
+
     date_style = NamedStyle(name='date_style', number_format='DD/MM/YYYY HH:MM')
     if "date_style" not in wb.named_styles:
         wb.add_named_style(date_style)
 
-    excel_start = datetime(1899, 12, 30)
+    # Appliquer le style date à toute la colonne A et forcer la conversion Pandas datetime
+    # (dans le DataFrame AVANT export, tout ce qui n'est pas date devient NaT)
+    dates_col = pd.to_datetime(df.iloc[:,0], errors='coerce')
 
-    for r, row in enumerate(df.itertuples(index=False), start=1):
-        for c, v in enumerate(row, start=1):
-            cell = ws.cell(row=r, column=c, value=v)
-            if c == 1:
-                date_val = None
-                # 1. Tenter conversion pandas (prend en charge texte, datetime natif, etc.)
-                try:
-                    date_val = pd.to_datetime(v, errors='coerce')
-                except:
-                    date_val = None
-                # 2. Si c'est reconnu, alors on met la valeur datetime
-                if pd.notnull(date_val):
-                    cell.value = date_val
-                    cell.style = date_style
-                else:
-                    # 3. Si c'est un float/int (date Excel "serial")
-                    if isinstance(v, (float, int)) and not pd.isna(v):
-                        try:
-                            cell.value = excel_start + timedelta(days=float(v))
-                            cell.style = date_style
-                        except:
-                            pass
-                    # Sinon, laisse la valeur telle quelle
+    for r in range(len(df)):
+        # Colonne A - date forcée au format datetime ou cellule vide
+        cell = ws.cell(row=r+1, column=1)
+        v = dates_col.iloc[r]
+        if pd.notnull(v):
+            cell.value = v
+            cell.style = date_style
+        else:
+            cell.value = None
+            cell.style = date_style
+        # Autres colonnes
+        for c in range(1, len(df.columns)):
+            ws.cell(row=r+1, column=c+1, value=df.iloc[r, c])
 
     orange = PatternFill("solid", fgColor="FFA500")
     blue   = PatternFill("solid", fgColor="ADD8E6")
@@ -184,16 +161,11 @@ def to_excel(df, set_starts, anomaly_cells, meta, anomalies_by_set, ranking):
     buf.seek(0)
     return buf.getvalue()
 
-# Interface Streamlit
-
 uploaded = st.file_uploader("Téléverse ton fichier .xlsx", type=["xlsx"])
 analyse = st.button("Analyser")
 
 if uploaded and analyse:
     df = pd.read_excel(uploaded, engine='openpyxl')
-
-    # On n’impose pas la conversion dans le DataFrame (pour éviter NaT partout).
-    # C’est l’export qui gère intelligemment l’affichage des dates.
 
     df_clean = clean_data(df.copy())
     set_starts, anomaly_cells, meta, anomalies_by_set = detect_sets_and_anomalies(df_clean)
