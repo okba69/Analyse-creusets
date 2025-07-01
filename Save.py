@@ -13,7 +13,7 @@ st.markdown("Dépose ton fichier Excel, puis clique sur **Analyser**. Les seuils
 CLEAN_THRESHOLD   = 60
 SET_THRESHOLD     = 80
 ANOMALY_THRESHOLD = 70
-MIN_DROP_COUNT    = 30  # <-- Ajoute ici le seuil de repassage sous 70 pour déclencher un nouveau set
+RESET_COUNT       = 30    # Nb d'emplacements à faire repasser sous 70 pour permettre nouveau set
 
 def clean_data(df: pd.DataFrame) -> pd.DataFrame:
     data_cols = df.columns[1:57]
@@ -40,31 +40,33 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
     data_cols = list(df.columns[1:57])
     set_starts = []
     set_count = 0
-    in_set = False
     anomalies_by_set = {}
     anomaly_cells = []
     meta = []
     current = set()
     last = 0
+
+    in_set = False           # Est-on dans un set (classique)
+    can_detect_new_set = True  # Peut-on détecter un set (phase de "reset" ou non)
+    reset_tracker = set()      # Colonnes descendues sous 70 depuis dernier set
+
     dropped_flags = {ci: False for ci in range(len(data_cols))}
-    dropped_since_last_set = set()  # <-- pour compter les emplacements descendus sous 70
 
     for idx in range(len(df)):
         vals = pd.to_numeric(df.loc[idx, data_cols], errors='coerce')
         cnt80 = (vals > SET_THRESHOLD).sum()
         cnt70 = (vals > ANOMALY_THRESHOLD).sum()
 
-        # Met à jour dropped_flags pour chaque colonne
+        # Suivi des colonnes passées sous 70 pour le reset :
         for ci, col in enumerate(data_cols):
             v = pd.to_numeric(df.at[idx, col], errors='coerce')
-            # repère chaque descente SOUS 70
             if pd.notna(v) and v < ANOMALY_THRESHOLD:
                 dropped_flags[ci] = True
-                dropped_since_last_set.add(ci)  # Ajoute cet emplacement à la liste "descendus sous 70"
+                reset_tracker.add(ci)  # Ajoute cet emplacement comme "refroidi" (descendu sous 70)
 
         if not in_set:
-            # SEULEMENT si 30 emplacements sont repassés sous 70, on autorise la détection du nouveau set
-            if len(dropped_since_last_set) >= MIN_DROP_COUNT and cnt80 >= 40:
+            # On ne peut détecter un nouveau set QUE si le reset est complet
+            if can_detect_new_set and cnt80 >= 40:
                 set_count += 1
                 try:
                     ts = pd.to_datetime(df.iloc[idx,0], errors='coerce')
@@ -74,7 +76,6 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
                         date = "Inconnu"
                 except:
                     date = "Inconnu"
-                # sauvegarde set précédent
                 if last > 0 and current:
                     anomalies_by_set[last] = sorted(current)
                 meta.append({"Set": set_count, "Date": date})
@@ -82,8 +83,10 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
                 current = set()
                 in_set = True
                 dropped_flags = {ci: False for ci in range(len(data_cols))}
-                dropped_since_last_set = set()  # On RESET le compteur après démarrage du set
+                can_detect_new_set = False
+                reset_tracker = set()
             else:
+                # Phase de refroidissement : tant que reset incomplet, pas de détection set
                 for ci, col in enumerate(data_cols):
                     if not dropped_flags[ci]:
                         continue
@@ -97,6 +100,9 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
                         if colnum not in current:
                             current.add(colnum)
                             anomaly_cells.append((idx+2, ci+2))
+            # Ici on vérifie si le reset est acquis
+            if not can_detect_new_set and len(reset_tracker) >= RESET_COUNT:
+                can_detect_new_set = True
         else:
             if cnt70 < ANOMALY_THRESHOLD:
                 in_set = False
