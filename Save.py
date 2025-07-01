@@ -46,27 +46,23 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
     current = set()
     last = 0
 
-    in_set = False           # Est-on dans un set (classique)
-    can_detect_new_set = True  # Peut-on détecter un set (phase de "reset" ou non)
-    reset_tracker = set()      # Colonnes descendues sous 70 depuis dernier set
-
+    in_set = False
+    can_detect_new_set = True
+    reset_tracker = set()
     dropped_flags = {ci: False for ci in range(len(data_cols))}
 
     for idx in range(len(df)):
         vals = pd.to_numeric(df.loc[idx, data_cols], errors='coerce')
         cnt80 = (vals > SET_THRESHOLD).sum()
         cnt70 = (vals > ANOMALY_THRESHOLD).sum()
-
-        # Suivi des colonnes passées sous 70 pour le reset :
         for ci, col in enumerate(data_cols):
             v = pd.to_numeric(df.at[idx, col], errors='coerce')
             if pd.notna(v) and v < ANOMALY_THRESHOLD:
                 dropped_flags[ci] = True
-                reset_tracker.add(ci)  # Ajoute cet emplacement comme "refroidi" (descendu sous 70)
-
+                reset_tracker.add(ci)
         if not in_set:
-            # On ne peut détecter un nouveau set QUE si le reset est complet
             if can_detect_new_set and cnt80 >= 40:
+                set_starts.append(idx + 1)  # Ligne de détection du set (Excel est 1-based)
                 set_count += 1
                 try:
                     ts = pd.to_datetime(df.iloc[idx,0], errors='coerce')
@@ -86,7 +82,6 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
                 can_detect_new_set = False
                 reset_tracker = set()
             else:
-                # Phase de refroidissement : tant que reset incomplet, pas de détection set
                 for ci, col in enumerate(data_cols):
                     if not dropped_flags[ci]:
                         continue
@@ -100,13 +95,11 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
                         if colnum not in current:
                             current.add(colnum)
                             anomaly_cells.append((idx+2, ci+2))
-            # Ici on vérifie si le reset est acquis
             if not can_detect_new_set and len(reset_tracker) >= RESET_COUNT:
                 can_detect_new_set = True
         else:
             if cnt70 < ANOMALY_THRESHOLD:
                 in_set = False
-
     if last > 0 and current:
         anomalies_by_set[last] = sorted(current)
     return set_starts, anomaly_cells, meta, anomalies_by_set
