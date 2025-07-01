@@ -40,7 +40,6 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
                 df.at[i, col] = ""
     return df
 
-
 def detect_sets_and_anomalies(df: pd.DataFrame):
     data_cols = list(df.columns[1:57])
     set_starts = []
@@ -121,8 +120,7 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
 
     return set_starts, anomaly_cells, meta, anomalies_by_set
 
-
-def to_excel(df, set_starts, anomaly_cells, meta, anomalies_by_set, top10):
+def to_excel(df, set_starts, anomaly_cells, meta, anomalies_by_set, ranking):
     wb = Workbook()
     ws = wb.active
     ws.title = "Données nettoyées"
@@ -150,8 +148,8 @@ def to_excel(df, set_starts, anomaly_cells, meta, anomalies_by_set, top10):
     ws2.append([])
     ws2.append(["Total anomalies", total_anomalies])
     ws2.append([])
-    ws2.append(["TOP 5 Emplacements","Occurrences"])
-    for val, cnt in top10[:5]:
+    ws2.append(["Classement complet Emplacements","Occurrences"])
+    for val, cnt in ranking:
         ws2.append([val, cnt])
 
     ws.column_dimensions["A"].width = 20
@@ -176,7 +174,7 @@ if uploaded and analyse:
     set_starts, anomaly_cells, meta, anomalies_by_set = detect_sets_and_anomalies(df_clean)
 
     all_anoms = [x for vals in anomalies_by_set.values() for x in vals]
-    top10 = Counter(all_anoms).most_common(10)
+    ranking = Counter(all_anoms).most_common()  # Prend tout le classement, sans limite
 
     # Affichage récapitulatif
     recap = pd.DataFrame([
@@ -189,13 +187,13 @@ if uploaded and analyse:
     total = recap["Nb anomalies"].sum()
     st.markdown(f"**Total anomalies sur tous les sets : {total}**")
 
-    # Affichage Top5
-    st.markdown("## Top 5 des emplacements changés le plus souvent")
-    df_top5 = pd.DataFrame(top10[:5], columns=["Emplacement","Occurrences"]).set_index("Emplacement")
-    st.table(df_top5)
+    # Affichage classement complet
+    st.markdown("## Classement complet des emplacements changés le plus souvent")
+    df_ranking = pd.DataFrame(ranking, columns=["Emplacement","Occurrences"]).set_index("Emplacement")
+    st.table(df_ranking)
 
     # Bouton de téléchargement
-    excel_bytes = to_excel(df_clean, set_starts, anomaly_cells, meta, anomalies_by_set, top10)
+    excel_bytes = to_excel(df_clean, set_starts, anomaly_cells, meta, anomalies_by_set, ranking)
     st.download_button(
         "📥 Télécharger le rapport Excel",
         data=excel_bytes,
