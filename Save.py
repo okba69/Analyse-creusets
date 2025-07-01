@@ -11,7 +11,7 @@ st.title("🔍 Analyse et détection de sets/anomalies")
 st.markdown("Dépose ton fichier Excel, puis clique sur **Analyser**. Les seuils sont préconfigurés.")
 
 CLEAN_THRESHOLD   = 60
-SET_THRESHOLD     = 80
+SET_THRESHOLD     = 79
 ANOMALY_THRESHOLD = 70
 RESET_COUNT       = 30
 
