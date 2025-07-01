@@ -55,14 +55,16 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
         vals = pd.to_numeric(df.loc[idx, data_cols], errors='coerce')
         cnt80 = (vals > SET_THRESHOLD).sum()
         cnt70 = (vals > ANOMALY_THRESHOLD).sum()
+        
         for ci, col in enumerate(data_cols):
             v = pd.to_numeric(df.at[idx, col], errors='coerce')
             if pd.notna(v) and v < ANOMALY_THRESHOLD:
                 dropped_flags[ci] = True
                 reset_tracker.add(ci)
+                
         if not in_set:
             if can_detect_new_set and cnt80 >= 40:
-                set_starts.append(idx + 1)
+                set_starts.append(idx + 1)  # +1 pour Excel (ligne 1-based)
                 set_count += 1
                 try:
                     ts = pd.to_datetime(df.iloc[idx,0], errors='coerce')
@@ -95,25 +97,33 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
                         colnum = ci + 1
                         if colnum not in current:
                             current.add(colnum)
-                            anomaly_cells.append((idx+2, ci+2))
+                            # Utiliser idx+1 pour être cohérent avec Excel (1-based)
+                            anomaly_cells.append((idx+1, ci+2))
             if not can_detect_new_set and len(reset_tracker) >= RESET_COUNT:
                 can_detect_new_set = True
         else:
             if cnt70 < ANOMALY_THRESHOLD:
                 in_set = False
+                
     if last > 0 and current:
         anomalies_by_set[last] = sorted(current)
 
-    # === Filtrage des anomalies sur les lignes d'un set, avant et après ===
+    # === Filtrage des anomalies sur les lignes d'un set ===
+    # Conversion des set_starts pour correspondre aux index des anomaly_cells
     set_rows_to_exclude = set()
-    for row in set_starts:
-        set_rows_to_exclude.add(row)      # Ligne du set
-        set_rows_to_exclude.add(row - 1)  # Ligne avant
-        set_rows_to_exclude.add(row + 1)  # Ligne après
+    for set_row in set_starts:  # set_starts contient déjà des index 1-based pour Excel
+        set_rows_to_exclude.add(set_row)      # Ligne du set
+        if set_row > 1:
+            set_rows_to_exclude.add(set_row - 1)  # Ligne avant (si elle existe)
+        set_rows_to_exclude.add(set_row + 1)  # Ligne après
 
-    anomaly_cells = [(row, col) for (row, col) in anomaly_cells if row not in set_rows_to_exclude]
+    # Filtrer les anomalies qui sont sur les mêmes lignes que les sets
+    anomaly_cells_filtered = []
+    for (row, col) in anomaly_cells:
+        if row not in set_rows_to_exclude:
+            anomaly_cells_filtered.append((row, col))
 
-    return set_starts, anomaly_cells, meta, anomalies_by_set
+    return set_starts, anomaly_cells_filtered, meta, anomalies_by_set
 
 def to_excel(df, set_starts, anomaly_cells, meta, anomalies_by_set, ranking):
     wb = Workbook()
