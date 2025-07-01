@@ -62,7 +62,7 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
                 reset_tracker.add(ci)
         if not in_set:
             if can_detect_new_set and cnt80 >= 40:
-                set_starts.append(idx + 1)  # Ligne de détection du set (Excel est 1-based)
+                set_starts.append(idx + 1)
                 set_count += 1
                 try:
                     ts = pd.to_datetime(df.iloc[idx,0], errors='coerce')
@@ -81,6 +81,7 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
                 dropped_flags = {ci: False for ci in range(len(data_cols))}
                 can_detect_new_set = False
                 reset_tracker = set()
+                continue  # <-- Empêche la détection d'anomalies sur cette ligne
             else:
                 for ci, col in enumerate(data_cols):
                     if not dropped_flags[ci]:
