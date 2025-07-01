@@ -5,6 +5,7 @@ from openpyxl.styles import PatternFill, NamedStyle
 from openpyxl.utils import get_column_letter
 from io import BytesIO
 from collections import Counter
+from datetime import datetime, timedelta
 
 # Configuration de la page
 st.set_page_config(page_title="Analyse Creusets", layout="wide")
@@ -74,8 +75,11 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
             if cnt80 >= 40:
                 set_count += 1
                 try:
-                    ts = pd.to_datetime(df.iloc[idx,0])
-                    date = ts.strftime("%d/%m/%Y %H:%M")
+                    ts = pd.to_datetime(df.iloc[idx,0], errors='coerce')
+                    if pd.notnull(ts):
+                        date = ts.strftime("%d/%m/%Y %H:%M")
+                    else:
+                        date = "Inconnu"
                 except:
                     date = "Inconnu"
 
@@ -119,16 +123,31 @@ def to_excel(df, set_starts, anomaly_cells, meta, anomalies_by_set, ranking):
     if "date_style" not in wb.named_styles:
         wb.add_named_style(date_style)
 
+    excel_start = datetime(1899, 12, 30)
+
     for r, row in enumerate(df.itertuples(index=False), start=1):
         for c, v in enumerate(row, start=1):
             cell = ws.cell(row=r, column=c, value=v)
             if c == 1:
+                date_val = None
+                # 1. Tenter conversion pandas (prend en charge texte, datetime natif, etc.)
                 try:
-                    date_val = pd.to_datetime(v)
+                    date_val = pd.to_datetime(v, errors='coerce')
+                except:
+                    date_val = None
+                # 2. Si c'est reconnu, alors on met la valeur datetime
+                if pd.notnull(date_val):
                     cell.value = date_val
                     cell.style = date_style
-                except Exception:
-                    pass
+                else:
+                    # 3. Si c'est un float/int (date Excel "serial")
+                    if isinstance(v, (float, int)) and not pd.isna(v):
+                        try:
+                            cell.value = excel_start + timedelta(days=float(v))
+                            cell.style = date_style
+                        except:
+                            pass
+                    # Sinon, laisse la valeur telle quelle
 
     orange = PatternFill("solid", fgColor="FFA500")
     blue   = PatternFill("solid", fgColor="ADD8E6")
@@ -173,11 +192,8 @@ analyse = st.button("Analyser")
 if uploaded and analyse:
     df = pd.read_excel(uploaded, engine='openpyxl')
 
-    # Conversion date + heure + min dans le DataFrame si possible
-    try:
-        df.iloc[:,0] = pd.to_datetime(df.iloc[:,0]).dt.strftime('%d/%m/%Y %H:%M')
-    except Exception:
-        pass
+    # On n’impose pas la conversion dans le DataFrame (pour éviter NaT partout).
+    # C’est l’export qui gère intelligemment l’affichage des dates.
 
     df_clean = clean_data(df.copy())
     set_starts, anomaly_cells, meta, anomalies_by_set = detect_sets_and_anomalies(df_clean)
