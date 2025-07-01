@@ -1,10 +1,9 @@
 import streamlit as st
 import pandas as pd
 from openpyxl import Workbook
-from openpyxl.styles import PatternFill
+from openpyxl.styles import PatternFill, NamedStyle
 from openpyxl.utils import get_column_letter
 from io import BytesIO
-from datetime import time
 from collections import Counter
 
 # Configuration de la page
@@ -59,7 +58,6 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
     meta = []
     current = set()
     last = 0
-    # drapeaux pour chute sous seuil
     dropped_flags = {ci: False for ci in range(len(data_cols))}
 
     for idx in range(len(df)):
@@ -67,7 +65,6 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
         cnt80 = (vals > SET_THRESHOLD).sum()
         cnt70 = (vals > ANOMALY_THRESHOLD).sum()
 
-        # Mettre à jour dropped_flags pour chaque colonne
         for ci, col in enumerate(data_cols):
             v = pd.to_numeric(df.at[idx, col], errors='coerce')
             if pd.notna(v) and v < ANOMALY_THRESHOLD:
@@ -75,32 +72,26 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
 
         if not in_set:
             if cnt80 >= 40:
-                # début de set
                 set_count += 1
                 try:
                     ts = pd.to_datetime(df.iloc[idx,0])
-                    date = ts.strftime("%d/%m/%Y")
+                    date = ts.strftime("%d/%m/%Y %H:%M")
                 except:
                     date = "Inconnu"
 
-                # sauvegarde set précédent
                 if last > 0 and current:
                     anomalies_by_set[last] = sorted(current)
-                # reset anomalies pour nouveau set
                 meta.append({"Set": set_count, "Date": date})
                 last = set_count
                 current = set()
                 in_set = True
-                # reset dropped_flags pour nouveau set
                 dropped_flags = {ci: False for ci in range(len(data_cols))}
             else:
-                # détection anomalies uniquement après chute sous 70
                 for ci, col in enumerate(data_cols):
                     if not dropped_flags[ci]:
                         continue
                     v = pd.to_numeric(df.at[idx, col], errors='coerce')
                     if pd.notna(v) and v >= SET_THRESHOLD:
-                        # annulation si valeur suivante < seuil set
                         if idx+1 < len(df):
                             nv = pd.to_numeric(df.at[idx+1, col], errors='coerce')
                             if pd.notna(nv) and nv < SET_THRESHOLD:
@@ -110,11 +101,9 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
                             current.add(colnum)
                             anomaly_cells.append((idx+2, ci+2))
         else:
-            # fin de set
             if cnt70 < ANOMALY_THRESHOLD:
                 in_set = False
 
-    # sauvegarde dernier set
     if last > 0 and current:
         anomalies_by_set[last] = sorted(current)
 
@@ -124,9 +113,22 @@ def to_excel(df, set_starts, anomaly_cells, meta, anomalies_by_set, ranking):
     wb = Workbook()
     ws = wb.active
     ws.title = "Données nettoyées"
+    
+    # Création d'un style date + heure + minute
+    date_style = NamedStyle(name='date_style', number_format='DD/MM/YYYY HH:MM')
+    if "date_style" not in wb.named_styles:
+        wb.add_named_style(date_style)
+
     for r, row in enumerate(df.itertuples(index=False), start=1):
         for c, v in enumerate(row, start=1):
-            ws.cell(row=r, column=c, value=v)
+            cell = ws.cell(row=r, column=c, value=v)
+            if c == 1:
+                try:
+                    date_val = pd.to_datetime(v)
+                    cell.value = date_val
+                    cell.style = date_style
+                except Exception:
+                    pass
 
     orange = PatternFill("solid", fgColor="FFA500")
     blue   = PatternFill("solid", fgColor="ADD8E6")
@@ -152,7 +154,7 @@ def to_excel(df, set_starts, anomaly_cells, meta, anomalies_by_set, ranking):
     for val, cnt in ranking:
         ws2.append([val, cnt])
 
-    ws.column_dimensions["A"].width = 20
+    ws.column_dimensions["A"].width = 22
     for i in range(2, len(df.columns)+1):
         ws.column_dimensions[get_column_letter(i)].width = 5.5
     for col_cells in ws2.columns:
@@ -170,29 +172,32 @@ analyse = st.button("Analyser")
 
 if uploaded and analyse:
     df = pd.read_excel(uploaded, engine='openpyxl')
+
+    # Conversion date + heure + min dans le DataFrame si possible
+    try:
+        df.iloc[:,0] = pd.to_datetime(df.iloc[:,0]).dt.strftime('%d/%m/%Y %H:%M')
+    except Exception:
+        pass
+
     df_clean = clean_data(df.copy())
     set_starts, anomaly_cells, meta, anomalies_by_set = detect_sets_and_anomalies(df_clean)
 
     all_anoms = [x for vals in anomalies_by_set.values() for x in vals]
-    ranking = Counter(all_anoms).most_common()  # Prend tout le classement, sans limite
+    ranking = Counter(all_anoms).most_common()
 
-    # Affichage récapitulatif
     recap = pd.DataFrame([
         {"Set": m["Set"], "Date": m["Date"], "Nb anomalies": len(anomalies_by_set.get(m["Set"], []))}
         for m in meta
     ]).set_index("Set")
     st.markdown("## Récapitulatif des sets")
     st.table(recap)
-    # Total anomalies
     total = recap["Nb anomalies"].sum()
     st.markdown(f"**Total anomalies sur tous les sets : {total}**")
 
-    # Affichage classement complet
     st.markdown("## Classement complet des emplacements changés le plus souvent")
     df_ranking = pd.DataFrame(ranking, columns=["Emplacement","Occurrences"]).set_index("Emplacement")
     st.table(df_ranking)
 
-    # Bouton de téléchargement
     excel_bytes = to_excel(df_clean, set_starts, anomaly_cells, meta, anomalies_by_set, ranking)
     st.download_button(
         "📥 Télécharger le rapport Excel",
