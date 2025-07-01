@@ -67,7 +67,7 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
 
         # Détection de nouveau set
         if not in_set:
-            if can_detect_new_set and cnt80 >= 40:
+            if can_detect_new_set and cnt80 >= 25:
                 set_starts.append(idx + 1)
                 set_count += 1
                 try:
