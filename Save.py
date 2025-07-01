@@ -11,7 +11,7 @@ st.title("🔍 Analyse et détection de sets/anomalies")
 st.markdown("Dépose ton fichier Excel, puis clique sur **Analyser**. Les seuils sont préconfigurés.")
 
 CLEAN_THRESHOLD   = 60
-SET_THRESHOLD     = 79
+SET_THRESHOLD     = 80
 ANOMALY_THRESHOLD = 70
 RESET_COUNT       = 30
 
@@ -55,13 +55,13 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
     set_rows = set()  # Index 0-based pour les lignes de sets
     for idx in range(len(df)):
         vals = pd.to_numeric(df.loc[idx, data_cols], errors='coerce')
-        cnt80 = (vals > SET_THRESHOLD).sum()
+        cnt80 = (vals >= SET_THRESHOLD).sum()  # >= pour inclure exactement 80
         if cnt80 >= 40:
             set_rows.add(idx)
 
     for idx in range(len(df)):
         vals = pd.to_numeric(df.loc[idx, data_cols], errors='coerce')
-        cnt80 = (vals > SET_THRESHOLD).sum()
+        cnt80 = (vals >= SET_THRESHOLD).sum()  # >= pour inclure exactement 80
         cnt70 = (vals > ANOMALY_THRESHOLD).sum()
         
         for ci, col in enumerate(data_cols):
