@@ -42,9 +42,8 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def detect_sets_and_anomalies(df: pd.DataFrame):
-    data_cols = df.columns[1:57]
+    data_cols = list(df.columns[1:57])
     set_starts = []
-    # repérer début de set
     for idx in range(len(df)):
         vals = pd.to_numeric(df.loc[idx, data_cols], errors='coerce')
         if (vals > SET_THRESHOLD).sum() >= 40:
@@ -59,54 +58,55 @@ def detect_sets_and_anomalies(df: pd.DataFrame):
     meta = []
     current = set()
     last = 0
-    # flags pour chaque emplacement: si on est passé sous 70 après set
-    drop_flags = {i+1: False for i in range(len(df.columns)-1)}
+    # flags for drop under anomaly threshold after set start
+    drop_flags = {i: False for i in range(len(data_cols))}
 
     for idx in range(len(df)):
         vals = pd.to_numeric(df.loc[idx, data_cols], errors='coerce')
         cnt80 = (vals > SET_THRESHOLD).sum()
         cnt70 = (vals < ANOMALY_THRESHOLD).sum()
 
-        if cnt80 >= 40 and not in_set:
-            set_count += 1
-            # init flags après nouveau set
-            drop_flags = {i+1: False for i in range(len(data_cols))}
-            try:
-                ts = pd.to_datetime(df.iloc[idx,0])
-                date = ts.strftime("%d/%m/%Y")
-            except:
-                date = "Inconnu"
-            if last > 0 and current:
-                anomalies_by_set[last] = sorted(current)
-            meta.append({"Set": set_count, "Date": date})
-            last = set_count
-            current = set()
-            in_set = True
-        elif in_set:
-            # sortir du set
-            if cnt70 >= len(data_cols) - ANOMALY_THRESHOLD:  # ajuster si nécessaire
-                in_set = False
-        # gestion drop flags
-        for i, col in enumerate(data_cols, start=1):
+        # update drop flags
+        for ci, col in enumerate(data_cols):
             v = pd.to_numeric(df.at[idx, col], errors='coerce')
-            if v < ANOMALY_THRESHOLD:
-                drop_flags[i] = True
-        # détection anomalies selon flags
-        if in_set:
-            for i, col in enumerate(data_cols, start=1):
-                if not drop_flags[i]:
+            if pd.notna(v) and v < ANOMALY_THRESHOLD:
+                drop_flags[ci] = True
+
+        if not in_set:
+            if cnt80 >= 40:
+                set_count += 1
+                try:
+                    ts = pd.to_datetime(df.iloc[idx,0])
+                    date = ts.strftime("%d/%m/%Y")
+                except:
+                    date = "Inconnu"
+                if last > 0 and current:
+                    anomalies_by_set[last] = sorted(current)
+                meta.append({"Set": set_count, "Date": date})
+                last = set_count
+                current = set()
+                in_set = True
+                # reset drop flags
+                drop_flags = {i: False for i in range(len(data_cols))}
+        else:
+            # detect anomalies only after drop under 70
+            for ci, col in enumerate(data_cols):
+                if not drop_flags[ci]:
                     continue
                 v = pd.to_numeric(df.at[idx, col], errors='coerce')
-                if v >= SET_THRESHOLD:
-                    nv = None
+                if pd.notna(v) and v >= SET_THRESHOLD:
                     if idx+1 < len(df):
                         nv = pd.to_numeric(df.at[idx+1, col], errors='coerce')
-                    if nv is not None and pd.notna(nv) and nv < SET_THRESHOLD:
-                        continue
-                    if i not in current:
-                        current.add(i)
-                        anomaly_cells.append((idx+2, i+1))
-    # dernier set
+                        if pd.notna(nv) and nv < SET_THRESHOLD:
+                            continue
+                    colnum = ci + 1
+                    if colnum not in current:
+                        current.add(colnum)
+                        anomaly_cells.append((idx+2, ci+2))
+            # end of set condition
+            if cnt70 < ANOMALY_THRESHOLD:
+                in_set = False
+
     if last > 0 and current:
         anomalies_by_set[last] = sorted(current)
 
@@ -127,6 +127,7 @@ def to_excel(df, set_starts, anomaly_cells, meta, anomalies_by_set):
             cell.fill = orange
     for row, col in anomaly_cells:
         ws.cell(row=row, column=col).fill = blue
+    # Résumé sheet
     ws2 = wb.create_sheet("Résumé")
     ws2.append(["Set", "Date", "Nb anomalies"]);
     total = 0
@@ -137,7 +138,7 @@ def to_excel(df, set_starts, anomaly_cells, meta, anomalies_by_set):
         ws2.append([s, m["Date"], nb])
     ws2.append([])
     ws2.append(["Total anomalies", total])
-    # ajout anomalies par emplacement
+    # anomalies per location
     counter = Counter([x for vals in anomalies_by_set.values() for x in vals])
     ws2.append([])
     ws2.append(["Emplacement","Occurrences"])
@@ -160,17 +161,20 @@ if uploaded and analyse:
     df = pd.read_excel(uploaded, engine='openpyxl')
     df_clean = clean_data(df.copy())
     set_starts, anomaly_cells, meta, anomalies_by_set = detect_sets_and_anomalies(df_clean)
-    # récapitulatif sets
-    recap = pd.DataFrame([{"Set": m["Set"], "Date": m["Date"], "Nb anomalies": len(anomalies_by_set.get(m["Set"], []))} for m in meta]).set_index("Set")
+    # recap sets
+    recap = pd.DataFrame([
+        {"Set": m["Set"], "Date": m["Date"], "Nb anomalies": len(anomalies_by_set.get(m["Set"], []))}
+        for m in meta
+    ]).set_index("Set")
     st.markdown("## Récapitulatif des sets")
     st.table(recap)
     total = recap["Nb anomalies"].sum()
     st.markdown(f"**Total anomalies sur tous les sets : {total}**")
-    # anomalies par emplacement
+    # anomalies per emplacement
     counter = Counter([x for vals in anomalies_by_set.values() for x in vals])
     df_all = pd.DataFrame(sorted(counter.items()), columns=["Emplacement","Occurrences"]).set_index("Emplacement")
     st.markdown("## Anomalies par emplacement")
     st.table(df_all)
-    # téléchargement
+    # download button
     excel_bytes = to_excel(df_clean, set_starts, anomaly_cells, meta, anomalies_by_set)
     st.download_button("📥 Télécharger le rapport Excel", data=excel_bytes, file_name="analyse_creusets_report.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
